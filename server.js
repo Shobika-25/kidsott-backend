@@ -165,7 +165,22 @@ app.use(
   homeRoutes
 );
 
-// Subscription read-only APIs.
+/* =========================================================
+   ADMIN API ROUTES
+========================================================= */
+
+app.use("/api/admin/home", require("./src/routes/admin-home.routes"));
+app.use("/api/admin/users", require("./src/routes/admin-users.routes"));
+app.use("/api/admin/subscriptions", require("./src/routes/admin-subscriptions.routes"));
+app.use("/api/admin/support", require("./src/routes/admin-support.routes"));
+app.use("/api/admin/settings", require("./src/routes/admin-settings.routes"));
+app.use("/api/admin/dashboard", require("./src/routes/admin-dashboard.routes"));
+app.use("/api/admin/reports", require("./src/routes/admin-reports.routes"));
+
+/* =========================================================
+   SUBSCRIPTION READ-ONLY API
+========================================================= */
+
 // GET /subscriptions/plans
 // GET /subscriptions/me
 // Actual purchases remain disabled.
