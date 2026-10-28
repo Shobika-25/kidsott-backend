@@ -1,4 +1,4 @@
-﻿const bcrypt = require("bcryptjs");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const db = require("../config/db");
@@ -242,6 +242,24 @@ async function login(req, res) {
     const token =
       createToken(user);
 
+    // KIDSOTT_LAST_LOGIN_TRACKING_V1
+    // Run only after password verification and JWT creation.
+    // Do not change the profile's updated_at timestamp.
+    const [loginTracking] = await db.query(
+      `UPDATE users
+       SET last_login_at = CURRENT_TIMESTAMP(3),
+           updated_at = updated_at
+       WHERE id = ?
+         AND is_active = 1`,
+      [user.id]
+    );
+
+    if (Number(loginTracking.affectedRows) !== 1) {
+      return res.status(403).json({
+        success: false,
+        message: "Account is no longer available."
+      });
+    }
     return res.status(200).json({
       success: true,
       message:
