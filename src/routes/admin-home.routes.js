@@ -14,11 +14,16 @@ router.get("/sections", async (_req, res) => {
     const [rows] = await db.query(`
       SELECT
         id, section_key AS sectionKey, title,
+        subtitle,
         layout, source_type AS sourceType,
         source_value AS sourceValue,
         item_limit AS itemLimit,
         sort_order AS sortOrder,
-        is_active AS isActive
+        is_active AS isActive,
+        DATE_FORMAT(start_at, '%Y-%m-%dT%H:%i') AS startAt,
+        DATE_FORMAT(end_at, '%Y-%m-%dT%H:%i') AS endAt,
+        DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
+        DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s') AS updatedAt
       FROM home_sections
       ORDER BY sort_order ASC, id ASC
     `);
@@ -73,12 +78,17 @@ router.get("/sections", async (_req, res) => {
         id,
         sectionKey: String(row.sectionKey || ""),
         title: String(row.title || ""),
+        subtitle: row.subtitle == null ? "" : String(row.subtitle),
         layout: String(row.layout || "landscape"),
         sourceType: type,
         sourceValue: row.sourceValue == null ? "" : String(row.sourceValue),
         itemLimit: Math.max(1, Number(row.itemLimit) || 10),
         sortOrder: Number(row.sortOrder),
         isActive: Boolean(row.isActive),
+        startAt: row.startAt == null ? "" : String(row.startAt),
+        endAt: row.endAt == null ? "" : String(row.endAt),
+        createdAt: row.createdAt == null ? "" : String(row.createdAt),
+        updatedAt: row.updatedAt == null ? "" : String(row.updatedAt),
         videoIds: links.length ? links : fallback,
       };
     });

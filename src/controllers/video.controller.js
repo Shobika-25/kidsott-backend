@@ -1,3 +1,5 @@
+// KIDSOTT_VIDEO_METADATA_WRITE_V1
+// KIDSOTT_VIDEO_METADATA_READ_V1
 const db =
   require("../config/db");
 
@@ -27,6 +29,170 @@ function parseTags(value) {
   }
 
   return [];
+}
+
+function parseExtendedVideoFields(body, current = null) {
+  const has = key =>
+    Object.prototype.hasOwnProperty.call(body, key);
+
+  function readText(key, column, limit) {
+    const supplied = has(key);
+    const raw = supplied
+      ? body[key]
+      : current
+        ? current[column]
+        : null;
+
+    if (raw === null || raw === undefined || raw === "") {
+      return { value: null };
+    }
+
+    if (typeof raw !== "string") {
+      return { error: key + " must be text." };
+    }
+
+    const value = raw.trim();
+
+    if (value.length > limit || /[\x00-\x1f\x7f]/.test(value)) {
+      return { error: key + " has invalid characters or length." };
+    }
+
+    return { value: value || null };
+  }
+
+  const type = readText("contentType", "content_type", 20);
+  const language = readText("language", "language", 50);
+  const landscape = readText(
+    "landscapeThumbnailUrl",
+    "landscape_thumbnail_url",
+    2048
+  );
+  const portrait = readText(
+    "portraitThumbnailUrl",
+    "portrait_thumbnail_url",
+    2048
+  );
+
+  for (const field of [type, language, landscape, portrait]) {
+    if (field.error) return { error: field.error };
+  }
+
+  if (
+    type.value !== null &&
+    !["Movie", "Episode", "Short"].includes(type.value)
+  ) {
+    return { error: "Content type must be Movie, Episode or Short." };
+  }
+
+  // KIDSOTT_LOCAL_THUMBNAIL_URL_V1
+  // Local generated image URLs are allowed for development only.
+  // External artwork still requires HTTPS.
+  function isLocalUploadedImageUrl(raw) {
+    if (process.env.NODE_ENV === "production") {
+      return false;
+    }
+
+    const dbHost = String(process.env.DB_HOST || "")
+      .trim()
+      .toLowerCase();
+
+    if (!["localhost", "127.0.0.1", "::1"].includes(dbHost)) {
+      return false;
+    }
+
+    const port = String(process.env.PORT || "5000");
+
+    if (
+      !/^[0-9]{1,5}$/.test(port) ||
+      Number(port) < 1 ||
+      Number(port) > 65535
+    ) {
+      return false;
+    }
+
+    try {
+      const url = new URL(raw);
+
+      const allowedOrigins = new Set([
+        "http://127.0.0.1:" + port,
+        "http://localhost:" + port,
+        "http://[::1]:" + port
+      ]);
+
+      if (
+        !allowedOrigins.has(url.origin) ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash
+      ) {
+        return false;
+      }
+
+      return /^\/api\/media\/files\/images\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.(jpg|jpeg|png|webp)$/i
+        .test(url.pathname);
+    } catch {
+      return false;
+    }
+  }
+
+  for (const [name, key, field] of [
+    ["Landscape thumbnail", "landscapeThumbnailUrl", landscape],
+    ["Portrait thumbnail", "portraitThumbnailUrl", portrait]
+  ]) {
+    // Existing values are retained when the field is omitted.
+    if (field.value === null || !has(key)) {
+      continue;
+    }
+
+    let url;
+
+    try {
+      url = new URL(field.value);
+    } catch {
+      return {
+        error: name + " must be a valid HTTPS URL or local uploaded image."
+      };
+    }
+
+    const validHttps =
+      url.protocol === "https:" &&
+      Boolean(url.hostname) &&
+      !url.username &&
+      !url.password;
+
+    if (!validHttps && !isLocalUploadedImageUrl(field.value)) {
+      return {
+        error: name + " must be a valid HTTPS URL or local uploaded image."
+      };
+    }
+  }
+
+  const activeRaw = has("isActive")
+    ? body.isActive
+    : current
+      ? current.is_active
+      : 1;
+
+  let isActive;
+
+  if (activeRaw === true || activeRaw === 1) {
+    isActive = 1;
+  } else if (activeRaw === false || activeRaw === 0) {
+    isActive = 0;
+  } else {
+    return { error: "isActive must be a boolean." };
+  }
+
+  return {
+    values: {
+      contentType: type.value,
+      language: language.value,
+      isActive,
+      landscapeThumbnailUrl: landscape.value,
+      portraitThumbnailUrl: portrait.value
+    }
+  };
 }
 
 function normalizeVideo(row) {
@@ -91,8 +257,10 @@ videoUrl:
       row.ageRating,
     rating: row.rating == null ? null : Number(row.rating),
     tags,
-    status:
-      row.status,
+    status: row.status,
+    contentType: row.contentType ?? null,
+    language: row.language ?? null,
+    isActive: Number(row.isActive) === 1,
     isFeatured:
       Boolean(
         row.isFeatured
@@ -152,6 +320,9 @@ v.video_url
 
     v.tags,
 
+    v.content_type AS contentType,
+    v.language AS language,
+    v.is_active AS isActive,
     v.status,
 
     v.is_featured
@@ -219,6 +390,7 @@ async function getVideos(
 
     const conditions = [
       "v.status = 'published'",
+      "v.is_active = 1",
       "c.is_active = 1",
     ];
 
@@ -354,6 +526,8 @@ async function getVideoById(
             v.id = ?
             AND
             v.status = 'published'
+            AND
+            v.is_active = 1
             AND
             c.is_active = 1
 
@@ -525,6 +699,22 @@ async function createVideo(
         0
       );
 
+    const parsedMetadata = parseExtendedVideoFields(req.body);
+
+    if (parsedMetadata.error) {
+
+      return res.status(400).json({
+
+        success: false,
+
+        message: parsedMetadata.error
+
+      });
+
+    }
+
+    const extended = parsedMetadata.values;
+
     const [categories] =
       await db.query(
         `
@@ -562,12 +752,18 @@ async function createVideo(
             status,
             is_featured,
             sort_order,
-            created_by
+            created_by,
+            content_type,
+            language,
+            is_active,
+            landscape_thumbnail_url,
+            portrait_thumbnail_url
           )
           VALUES (
-            ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?, ?, ?
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?
           )
         `,
         [
@@ -586,6 +782,11 @@ async function createVideo(
           isFeatured,
           sortOrder,
           req.user.id,
+          extended.contentType,
+          extended.language,
+          extended.isActive,
+          extended.landscapeThumbnailUrl,
+          extended.portraitThumbnailUrl,
         ]
       );
 
@@ -653,6 +854,13 @@ async function updateVideo(
 
     const current =
       rows[0];
+    const parsedMetadata = parseExtendedVideoFields(req.body, current);
+    if (parsedMetadata.error) {
+      return res.status(400).json({
+        success: false, message: parsedMetadata.error
+      });
+    }
+    const extended = parsedMetadata.values;
 
     const title =
       req.body.title !==
@@ -802,7 +1010,12 @@ async function updateVideo(
           tags = ?,
           status = ?,
           is_featured = ?,
-          sort_order = ?
+          sort_order = ?,
+          content_type = ?,
+          language = ?,
+          is_active = ?,
+          landscape_thumbnail_url = ?,
+          portrait_thumbnail_url = ?
         WHERE id = ?
       `,
       [
@@ -822,6 +1035,11 @@ async function updateVideo(
         status,
         isFeatured,
         sortOrder,
+        extended.contentType,
+        extended.language,
+        extended.isActive,
+        extended.landscapeThumbnailUrl,
+        extended.portraitThumbnailUrl,
         id,
       ]
     );

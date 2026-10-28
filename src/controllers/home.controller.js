@@ -1,4 +1,4 @@
-﻿
+
 
 const pool = require("../config/db");
 
@@ -75,16 +75,32 @@ async function getVideoIdsBySource(
   const limit =
     safeLimit(itemLimit);
 
-  if (
-    sourceType === "manual"
-  ) {
-    return parseManualIds(
-      sourceValue,
-    ).slice(
-      0,
-      limit,
+  if (sourceType === "manual") {
+    const requestedIds = parseManualIds(sourceValue);
+    if (!requestedIds.length) return [];
+
+    const placeholders = requestedIds.map(() => "?").join(", ");
+    const [visibleRows] = await pool.query(
+      `SELECT v.id
+       FROM videos v
+       INNER JOIN categories c ON c.id = v.category_id
+       WHERE v.id IN (${placeholders})
+         AND v.status = 'published'
+         AND v.is_active = 1
+         AND c.is_active = 1`,
+      requestedIds,
     );
+
+    const visibleIds = new Set(
+      visibleRows.map(row => Number(row.id))
+    );
+
+    return requestedIds
+      .filter(id => visibleIds.has(id))
+      .slice(0, limit);
   }
+
+  // KIDSOTT_HOME_VIDEO_VISIBILITY_V1
 
   let sql = "";
   let params = [];
@@ -96,6 +112,13 @@ async function getVideoIdsBySource(
         SELECT v.id
         FROM videos v
         WHERE v.status = 'published'
+          AND v.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM categories c
+            WHERE c.id = v.category_id
+              AND c.is_active = 1
+          )
           AND v.is_featured = 1
         ORDER BY
           v.updated_at DESC,
@@ -112,6 +135,13 @@ async function getVideoIdsBySource(
         SELECT v.id
         FROM videos v
         WHERE v.status = 'published'
+          AND v.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM categories c
+            WHERE c.id = v.category_id
+              AND c.is_active = 1
+          )
         ORDER BY
           v.updated_at DESC,
           v.id DESC
@@ -127,6 +157,13 @@ async function getVideoIdsBySource(
         SELECT v.id
         FROM videos v
         WHERE v.status = 'published'
+          AND v.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM categories c
+            WHERE c.id = v.category_id
+              AND c.is_active = 1
+          )
         ORDER BY
           v.created_at DESC,
           v.id DESC
@@ -154,6 +191,13 @@ async function getVideoIdsBySource(
           ON f.video_id = v.id
 
         WHERE v.status = 'published'
+          AND v.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM categories c
+            WHERE c.id = v.category_id
+              AND c.is_active = 1
+          )
 
         GROUP BY
           v.id,
@@ -191,6 +235,13 @@ async function getVideoIdsBySource(
           ON f.video_id = v.id
 
         WHERE v.status = 'published'
+          AND v.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM categories c
+            WHERE c.id = v.category_id
+              AND c.is_active = 1
+          )
 
         GROUP BY
           v.id,
@@ -224,6 +275,13 @@ async function getVideoIdsBySource(
           ON f.video_id = v.id
 
         WHERE v.status = 'published'
+          AND v.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM categories c
+            WHERE c.id = v.category_id
+              AND c.is_active = 1
+          )
 
         GROUP BY
           v.id,
@@ -258,6 +316,13 @@ async function getVideoIdsBySource(
           ON f.video_id = v.id
 
         WHERE v.status = 'published'
+          AND v.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM categories c
+            WHERE c.id = v.category_id
+              AND c.is_active = 1
+          )
 
         GROUP BY
           v.id,
@@ -322,6 +387,8 @@ async function getHomeSections(
           is_active
         FROM home_sections
         WHERE is_active = 1
+          AND (start_at IS NULL OR start_at <= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE))
+          AND (end_at IS NULL OR end_at > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE))
         ORDER BY
           sort_order ASC,
           id ASC
@@ -364,6 +431,29 @@ async function getHomeSections(
         sourceType ===
         "continue_watching"
       ) {
+        continue;
+      }
+
+      /*
+       * Favorites are personalized for each authenticated user.
+       * Return configuration only; do not select globally ranked
+       * favorites as if they belonged to the current user.
+       * Mobile Home resolves the user's own favorites.
+       */
+      if (sourceType === "favorites") {
+        sections.push({
+          id: Number(row.id),
+          sectionKey: row.section_key,
+          title: row.title,
+          layout: row.layout === "portrait"
+            ? "portrait"
+            : "landscape",
+          sourceType: "favorites",
+          sourceValue: "",
+          videoIds: [],
+          itemLimit,
+          sortOrder: Number(row.sort_order)
+        });
         continue;
       }
 

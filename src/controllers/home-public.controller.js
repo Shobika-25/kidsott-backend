@@ -1,44 +1,5 @@
-const mysql =
-  require("mysql2/promise");
-
-const dotenv =
-  require("dotenv");
-
-dotenv.config();
-
-const db =
-  mysql.createPool({
-    host:
-      process.env.DB_HOST ||
-      "127.0.0.1",
-
-    port:
-      Number(
-        process.env.DB_PORT ||
-        3306
-      ),
-
-    user:
-      process.env.DB_USER ||
-      "root",
-
-    password:
-      process.env.DB_PASSWORD ||
-      "",
-
-    database:
-      process.env.DB_NAME ||
-      "kidsott_db",
-
-    waitForConnections:
-      true,
-
-    connectionLimit:
-      5,
-
-    queueLimit:
-      0,
-  });
+const db = require("../config/db");
+// KIDSOTT_HOME_PUBLIC_VISIBILITY_V1
 
 
 async function getPublicHome(
@@ -63,6 +24,8 @@ async function getPublicHome(
           is_active
         FROM home_sections
         WHERE is_active = 1
+          AND (start_at IS NULL OR start_at <= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE))
+          AND (end_at IS NULL OR end_at > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE))
         ORDER BY
           sort_order ASC,
           id ASC
@@ -79,16 +42,23 @@ async function getPublicHome(
         rows,
       ] =
         await db.query(`
-          SELECT
-            section_id,
-            video_id,
-            sort_order
-          FROM home_section_videos
-          ORDER BY
-            section_id ASC,
-            sort_order ASC,
-            video_id ASC
-        `);
+    SELECT
+      hsv.section_id,
+      hsv.video_id,
+      hsv.sort_order
+    FROM home_section_videos hsv
+    INNER JOIN videos v
+      ON v.id = hsv.video_id
+    INNER JOIN categories c
+      ON c.id = v.category_id
+    WHERE v.status = 'published'
+      AND v.is_active = 1
+      AND c.is_active = 1
+    ORDER BY
+      hsv.section_id ASC,
+      hsv.sort_order ASC,
+      hsv.video_id ASC
+  `);
 
 
       assignmentRows =
@@ -186,12 +156,11 @@ async function getPublicHome(
             ),
 
           sourceValue:
-            row.source_value === null ||
-            row.source_value === undefined
-              ? null
-              : String(
-                  row.source_value
-                ),
+    String(row.source_type || "").trim().toLowerCase() === "manual"
+      ? (videoIdsBySection.get(Number(row.id)) || []).join(",")
+      : row.source_value == null
+        ? null
+        : String(row.source_value),
 
           itemLimit:
             Math.max(

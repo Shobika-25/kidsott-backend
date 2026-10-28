@@ -1,3 +1,4 @@
+// KIDSOTT_LIBRARY_VISIBILITY_V1
 ﻿const db =
   require("../config/db");
 
@@ -41,9 +42,14 @@ async function videoExists(
   const [rows] =
     await connection.query(
       `
-        SELECT id
-        FROM videos
-        WHERE id = ?
+        SELECT v.id
+   FROM videos v
+   INNER JOIN categories c
+     ON c.id = v.category_id
+   WHERE v.id = ?
+     AND v.status = 'published'
+     AND v.is_active = 1
+     AND c.is_active = 1
         LIMIT 1
       `,
       [videoId]
@@ -76,8 +82,10 @@ async function fetchFavorites(
           ON c.id =
             v.category_id
 
-        WHERE
-          f.user_id = ?
+        WHERE f.user_id = ?
+     AND v.status = 'published'
+     AND v.is_active = 1
+     AND c.is_active = 1
 
         ORDER BY
           f.created_at DESC
@@ -133,8 +141,10 @@ async function fetchHistory(
           ON c.id =
             v.category_id
 
-        WHERE
-          h.user_id = ?
+        WHERE h.user_id = ?
+     AND v.status = 'published'
+     AND v.is_active = 1
+     AND c.is_active = 1
 
         ORDER BY
           h.last_watched_at DESC

@@ -150,6 +150,23 @@ async function createCategory(
         req.body.sortOrder || 0
       );
 
+    // KIDSOTT_CATEGORY_CREATE_STATUS_V1
+    // Existing clients default to Active.
+    // Explicit false saves Inactive directly.
+    const requestedIsActive = req.body.isActive;
+
+    if (
+      requestedIsActive !== undefined &&
+      typeof requestedIsActive !== "boolean"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Category isActive must be true or false.",
+      });
+    }
+
+    const isActive = requestedIsActive === false ? 0 : 1;
+
     if (!name) {
       return res.status(400).json({
         success: false,
@@ -182,13 +199,14 @@ async function createCategory(
             is_active,
             sort_order
           )
-          VALUES (?, ?, ?, ?, 1, ?)
+          VALUES (?, ?, ?, ?, ?, ?)
         `,
         [
           name,
           slug,
           description || null,
           imageUrl || null,
+          isActive,
           sortOrder,
         ]
       );

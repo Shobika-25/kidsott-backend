@@ -184,6 +184,15 @@ app.use("/api/admin/reports", require("./src/routes/admin-reports.routes"));
 // GET /subscriptions/plans
 // GET /subscriptions/me
 // Actual purchases remain disabled.
+app.use("/api/admin/home", require("./src/routes/admin-home.routes"));
+app.use("/api/admin/users", require("./src/routes/admin-users.routes"));
+app.use("/api/admin/subscriptions", require("./src/routes/admin-subscriptions.routes"));
+app.use("/api/admin/support", require("./src/routes/admin-support.routes"));
+app.use("/api/admin/settings", require("./src/routes/admin-settings.routes"));
+app.use("/api/admin/dashboard", require("./src/routes/admin-dashboard.routes"));
+app.use("/api/admin/reports", require("./src/routes/admin-reports.routes"));
+app.use("/api/media/upload", require("./src/routes/media-upload.routes"));
+app.use("/api/media/files", require("./src/routes/media-files.routes"));
 app.use("/subscriptions", subscriptionRoutes);
 app.use((req, res) => {
   res.status(404).json({

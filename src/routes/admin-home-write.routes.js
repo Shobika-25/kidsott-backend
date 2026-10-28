@@ -11,9 +11,15 @@ const SOURCE_TYPES = new Set([
   "manual", "category", "featured", "all", "recent", "trending",
   "popular", "favorites", "recommended", "continue_watching"
 ]);
+const PERSONALIZED_TYPES = new Set([
+  "favorites",
+  "continue_watching"
+]);
+
 const FIELDS = new Set([
   "sectionKey", "title", "layout", "sourceType", "sourceValue",
-  "itemLimit", "sortOrder", "isActive", "videoIds"
+  "itemLimit", "sortOrder", "isActive", "videoIds",
+  "subtitle", "startAt", "endAt"
 ]);
 const safeId = value => {
   const n = Number(value);
@@ -69,8 +75,52 @@ function asInt(value, field, min, max) {
   return value;
 }
 
+// DATETIME values represent local wall-clock time in Asia/Kolkata (IST).
+function optionalSubtitle(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string" || value.length > 240) {
+    fail(400, "subtitle must be text of at most 240 characters.");
+  }
+  return value.trim();
+}
+
+function optionalSchedule(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") {
+    fail(400, `${field} must be a local date and time.`);
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) fail(400, `${field} must use YYYY-MM-DDTHH:mm.`);
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+
+  const actual = new Date(Date.UTC(year, month - 1, day, hour, minute));
+
+  if (year < 1000 || month < 1 || month > 12 || day < 1 ||
+      hour > 23 || minute > 59 ||
+      actual.getUTCFullYear() !== year ||
+      actual.getUTCMonth() !== month - 1 ||
+      actual.getUTCDate() !== day) {
+    fail(400, `${field} contains an invalid calendar date or time.`);
+  }
+
+  return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:00`;
+}
+
 function parseFields(input, previous, existingIds) {
   const full = { ...previous, ...input };
+  const subtitle = optionalSubtitle(full.subtitle);
+  const startAt = optionalSchedule(full.startAt, "startAt");
+  const endAt = optionalSchedule(full.endAt, "endAt");
+
+  if (startAt && endAt && endAt <= startAt) {
+    fail(400, "endAt must be later than startAt.");
+  }
   const title = typeof full.title === "string" ? full.title.trim() : "";
   if (title.length < 2 || title.length > 160) {
     fail(400, "Section title must be 2 to 160 characters.");
@@ -117,7 +167,8 @@ function parseFields(input, previous, existingIds) {
     }
     return {
       sectionKey, title, layout: full.layout, sourceType: full.sourceType,
-      sourceValue, itemLimit, sortOrder, isActive: full.isActive, videoIds: ids
+      sourceValue, itemLimit, sortOrder, isActive: full.isActive, videoIds: ids,
+      subtitle, startAt, endAt
     };
   }
   if (input.videoIds !== undefined && parseVideoIds(input.videoIds).length) {
@@ -140,7 +191,8 @@ function parseFields(input, previous, existingIds) {
   }
   return {
     sectionKey, title, layout: full.layout, sourceType: full.sourceType,
-    sourceValue, itemLimit, sortOrder, isActive: full.isActive, videoIds: []
+    sourceValue, itemLimit, sortOrder, isActive: full.isActive, videoIds: [],
+    subtitle, startAt, endAt
   };
 }
 
@@ -217,13 +269,25 @@ function rowFields(row) {
     layout: row.layout, sourceType: row.source_type,
     sourceValue: row.source_value == null ? "" : String(row.source_value),
     itemLimit: Number(row.item_limit), sortOrder: Number(row.sort_order),
-    isActive: Boolean(row.is_active)
+    isActive: Boolean(row.is_active),
+    subtitle: row.subtitle == null ? "" : String(row.subtitle),
+    startAt: row.home_start_local == null ? null : String(row.home_start_local),
+    endAt: row.home_end_local == null ? null : String(row.home_end_local)
   };
+}
+
+function protectPersonalized(row) {
+  if (PERSONALIZED_TYPES.has(String(row.source_type))) {
+    fail(403, "Personalized Home sections are managed by the mobile app.");
+  }
 }
 
 async function lockedRow(conn, id) {
   const [rows] = await conn.query(
-    "SELECT * FROM home_sections WHERE id = ? FOR UPDATE", [id]
+    `SELECT *,
+      DATE_FORMAT(start_at, '%Y-%m-%dT%H:%i') AS home_start_local,
+      DATE_FORMAT(end_at, '%Y-%m-%dT%H:%i') AS home_end_local
+     FROM home_sections WHERE id = ? FOR UPDATE`, [id]
   );
   if (!rows.length) fail(404, "Home section not found.");
   return rows[0];
@@ -239,16 +303,19 @@ router.post("/sections", (req, res) => transaction(res, async conn => {
     sortOrder: body.sortOrder, isActive: body.isActive
   }, []);
   // parseFields gets defaults from its object; create has no prior DB row.
-  if (fields.sourceType === "continue_watching") {
-    fail(400, "Continue Watching is managed by the mobile app.");
+  if (PERSONALIZED_TYPES.has(fields.sourceType)) {
+    fail(400, "Personalized Home sections cannot be created manually.");
   }
   await checkVideos(conn, fields.videoIds, fields.isActive);
   const [result] = await conn.query(
     `INSERT INTO home_sections
-      (section_key, title, layout, source_type, source_value, item_limit, sort_order, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [fields.sectionKey, fields.title, fields.layout, fields.sourceType,
-      fields.sourceValue || null, fields.itemLimit, fields.sortOrder, fields.isActive ? 1 : 0]
+      (section_key, title, subtitle, layout, source_type, source_value,
+       item_limit, sort_order, is_active, start_at, end_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [fields.sectionKey, fields.title, fields.subtitle || null,
+      fields.layout, fields.sourceType, fields.sourceValue || null,
+      fields.itemLimit, fields.sortOrder, fields.isActive ? 1 : 0,
+      fields.startAt, fields.endAt]
   );
   const id = safeId(result.insertId);
   if (!id) fail(500, "Invalid Home section identifier.");
@@ -261,15 +328,21 @@ router.put("/sections/:id", (req, res) => transaction(res, async conn => {
   if (!id) fail(400, "Invalid Home section ID.");
   const body = checkBody(req.body);
   const row = await lockedRow(conn, id);
+  protectPersonalized(row);
   const previous = rowFields(row);
   const oldIds = previous.sourceType === "manual" ? await manualIds(conn, row) : [];
   const next = parseFields(body, previous, oldIds);
+  if (PERSONALIZED_TYPES.has(next.sourceType)) {
+    fail(400, "Cannot convert a regular section into a personalized section.");
+  }
   await checkVideos(conn, next.videoIds, next.isActive);
   await conn.query(
-    `UPDATE home_sections SET title = ?, layout = ?, source_type = ?,
-      source_value = ?, item_limit = ?, sort_order = ?, is_active = ? WHERE id = ?`,
-    [next.title, next.layout, next.sourceType, next.sourceValue || null,
-      next.itemLimit, next.sortOrder, next.isActive ? 1 : 0, id]
+    `UPDATE home_sections SET title = ?, subtitle = ?, layout = ?, source_type = ?,
+      source_value = ?, item_limit = ?, sort_order = ?, is_active = ?,
+      start_at = ?, end_at = ? WHERE id = ?`,
+    [next.title, next.subtitle || null, next.layout, next.sourceType,
+      next.sourceValue || null, next.itemLimit, next.sortOrder,
+      next.isActive ? 1 : 0, next.startAt, next.endAt, id]
   );
   // Both the mobile Home controller (source_value) and public Home
   // endpoint (home_section_videos) receive the same ordered assignments.
@@ -285,6 +358,7 @@ router.patch("/sections/:id/status", (req, res) => transaction(res, async conn =
     fail(400, "Expected isActive as a boolean.");
   }
   const row = await lockedRow(conn, id);
+  protectPersonalized(row);
   if (req.body.isActive && row.source_type === "manual") {
     const ids = await manualIds(conn, row);
     if (!ids.length) fail(400, "Cannot activate an empty manual section.");
@@ -343,7 +417,8 @@ router.post("/sections/reorder", (req, res) => transaction(res, async conn => {
 router.delete("/sections/:id", (req, res) => transaction(res, async conn => {
   const id = safeId(req.params.id);
   if (!id) fail(400, "Invalid Home section ID.");
-  await lockedRow(conn, id);
+  const row = await lockedRow(conn, id);
+  protectPersonalized(row);
   await conn.query("DELETE FROM home_section_videos WHERE section_id = ?", [id]);
   await conn.query("DELETE FROM home_sections WHERE id = ?", [id]);
   return { id, message: "Home section deleted. Video records were not deleted." };
