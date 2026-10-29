@@ -145,6 +145,20 @@ function parseExtendedVideoFields(body, current = null) {
       continue;
     }
 
+    // KIDSOTT_STEP07G15O_HISTORICAL_COMPAT
+    const previousColumn = key === "landscapeThumbnailUrl"
+      ? "landscape_thumbnail_url"
+      : "portrait_thumbnail_url";
+
+    const previousValue = current?.[previousColumn];
+
+    if (
+      typeof previousValue === "string" &&
+      previousValue.trim() === field.value
+    ) {
+      continue;
+    }
+
     let url;
 
     try {
@@ -599,6 +613,44 @@ async function getAdminVideos(
   }
 }
 
+// KIDSOTT_STEP07G9_HOSTED_MEDIA_URL_GUARD_V1
+// Refuse NEW localhost media values when saving into a hosted catalog.
+// Local MySQL and pre-existing records remain unchanged.
+function rejectsHostedLoopbackMediaInput(body, current = null) {
+  const dbHost = String(process.env.DB_HOST || "").trim().toLowerCase();
+  const localDatabase = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(dbHost);
+  const hostedDatabase = process.env.NODE_ENV === "production" || (Boolean(dbHost) && !localDatabase);
+  if (!hostedDatabase || !body || typeof body !== "object") return false;
+  const keys = ["thumbnailUrl", "videoUrl", "landscapeThumbnailUrl", "portraitThumbnailUrl",
+    "landscape_thumbnail_url", "portrait_thumbnail_url"];
+  const historicalColumns = {
+    thumbnailUrl: "thumbnail_url",
+    videoUrl: "video_url",
+    landscapeThumbnailUrl: "landscape_thumbnail_url",
+    portraitThumbnailUrl: "portrait_thumbnail_url",
+    landscape_thumbnail_url: "landscape_thumbnail_url",
+    portrait_thumbnail_url: "portrait_thumbnail_url",
+  };
+
+  return keys.some((key) => {
+    if (!Object.prototype.hasOwnProperty.call(body, key) || typeof body[key] !== "string") return false;
+    const previousValue = current?.[historicalColumns[key]];
+
+    if (
+      typeof previousValue === "string" &&
+      previousValue.trim() === body[key].trim()
+    ) {
+      return false;
+    }
+
+    try {
+      const url = new URL(body[key].trim());
+      const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+      return hostname === "localhost" || hostname === "localhost." || hostname === "::1" ||
+        hostname === "0.0.0.0" || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(hostname);
+    } catch { return false; }
+  });
+}
 async function createVideo(
   req,
   res
@@ -714,6 +766,13 @@ async function createVideo(
     }
 
     const extended = parsedMetadata.values;
+    // KIDSOTT_STEP07G9_HOSTED_MEDIA_URL_WRITE_CHECK
+    if (rejectsHostedLoopbackMediaInput(req.body)) {
+      return res.status(400).json({
+        success: false,
+        message: "Localhost media URLs cannot be saved to the hosted KidsOTT catalog. Use verified HTTPS media URLs.",
+      });
+    }
 
     const [categories] =
       await db.query(
@@ -861,6 +920,13 @@ async function updateVideo(
       });
     }
     const extended = parsedMetadata.values;
+    // KIDSOTT_STEP07G9_HOSTED_MEDIA_URL_WRITE_CHECK
+    if (rejectsHostedLoopbackMediaInput(req.body, current)) {
+      return res.status(400).json({
+        success: false,
+        message: "Localhost media URLs cannot be saved to the hosted KidsOTT catalog. Use verified HTTPS media URLs.",
+      });
+    }
 
     const title =
       req.body.title !==
