@@ -178,10 +178,15 @@ function parseRange(value, size) {
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 
 function adminPreviewEnabled() {
-  const localDb = ["localhost", "127.0.0.1", "::1"].includes(
-    String(process.env.DB_HOST || "").trim().toLowerCase()
-  );
-  return process.env.NODE_ENV !== "production" && localDb;
+  const host = String(process.env.DB_HOST || "").trim().toLowerCase();
+  const localDb = ["localhost", "127.0.0.1", "::1"].includes(host);
+  if (process.env.NODE_ENV !== "production") {
+    return localDb;
+  }
+  // Hosted draft previews require an explicit production opt-in.
+  // All existing Admin JWT, role, file-reference and ticket checks remain in force.
+  return host.length > 0 && !localDb &&
+    process.env.KIDSOTT_ENABLE_HOSTED_ADMIN_PREVIEW === "true";
 }
 
 function previewSigningKey() {
