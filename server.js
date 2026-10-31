@@ -193,6 +193,9 @@ app.use("/api/admin/dashboard", require("./src/routes/admin-dashboard.routes"));
 app.use("/api/admin/reports", require("./src/routes/admin-reports.routes"));
 app.use("/api/media/upload", require("./src/routes/media-upload.routes"));
 app.use("/api/media/files", require("./src/routes/media-files.routes"));
+if (process.env.KIDSOTT_RAZORPAY_TEST_ENABLED === "true") {
+  app.use("/subscriptions", require("./src/routes/razorpay-test.routes"));
+}
 app.use("/subscriptions", subscriptionRoutes);
 app.use((req, res) => {
   res.status(404).json({
