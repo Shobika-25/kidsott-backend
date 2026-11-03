@@ -86,7 +86,22 @@ async function isPubliclyEligible(kind, filename) {
       LIMIT 1
     `, [suffix]);
 
-    return rows.length > 0;
+        if (rows.length > 0) return true;
+    // KIDSOTT_REELS_UPLOAD_PUBLIC_MEDIA_06EE
+    // Public Uploaded MP4 only; draft/inactive Reels and categories stay private.
+    if (!filename.toLowerCase().endsWith(".mp4")) return false;
+    const [reelRows] = await db.query(`
+      SELECT r.id
+      FROM reels r
+      INNER JOIN categories c ON c.id = r.category_id
+      WHERE r.source_type = 'upload'
+        AND r.status = 'published'
+        AND r.is_active = 1
+        AND c.is_active = 1
+        AND r.video_url LIKE ?
+      LIMIT 1
+    `, [suffix]);
+    return reelRows.length > 0;
   }
 
   // KIDSOTT_CATEGORY_IMAGE_ACCESS_V1
@@ -178,10 +193,49 @@ function parseRange(value, size) {
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 
 function adminPreviewEnabled() {
+  // KIDSOTT_AIVEN_DEV_ADMIN_PREVIEW_06EE
+  // Explicit local-development opt-in for the known Aiven DB only.
+  // JWT, Admin role, file reference and signed ticket gates still apply.
+  if (
+    process.env.NODE_ENV === "development" &&
+    String(process.env.DB_HOST || "").trim().toLowerCase() === "kidsott-mysql-shobi5002-05dc.i.aivencloud.com" &&
+    Number(process.env.DB_PORT) === 10111 &&
+    process.env.DB_NAME === "kidsott_db_v2" &&
+    process.env.KIDSOTT_ENABLE_AIVEN_DEV_ADMIN_PREVIEW === "true"
+  ) {
+    const configured = (db.pool || db)?.config?.connectionConfig;
+    if (configured &&
+        configured.host === "kidsott-mysql-shobi5002-05dc.i.aivencloud.com" &&
+        Number(configured.port) === 10111 &&
+        configured.database === "kidsott_db_v2" &&
+        Boolean(configured.ssl) && configured.ssl.rejectUnauthorized !== false) {
+      return true;
+    }
+  }
   const host = String(process.env.DB_HOST || "").trim().toLowerCase();
   const localDb = ["localhost", "127.0.0.1", "::1"].includes(host);
   if (process.env.NODE_ENV !== "production") {
-    return localDb;
+    // KIDSOTT_REELS_HOSTED_PREVIEW_DEV_V1
+    // Preserve original local development behavior.
+    if (localDb) {
+      return true;
+    }
+
+    // Hosted development preview requires explicit opt-in
+    // AND the exact approved Aiven database with TLS.
+    const config = (db.pool || db)?.config?.connectionConfig;
+    const approvedHost =
+      "kidsott-mysql-shobi5002-05dc.i.aivencloud.com";
+
+    return (
+      process.env.KIDSOTT_ENABLE_HOSTED_ADMIN_PREVIEW === "true" &&
+      host === approvedHost &&
+      config?.host === approvedHost &&
+      Number(config?.port) === 10111 &&
+      config?.database === "kidsott_db_v2" &&
+      Boolean(config?.ssl) &&
+      config.ssl.rejectUnauthorized !== false
+    );
   }
   // Hosted draft previews require an explicit production opt-in.
   // All existing Admin JWT, role, file-reference and ticket checks remain in force.
@@ -206,7 +260,30 @@ async function referencedByVideo(kind, filename) {
       "SELECT id FROM videos WHERE video_url LIKE ? LIMIT 1",
       [suffix]
     );
-    return rows.length > 0;
+    if (rows.length > 0) {
+      return true;
+    }
+
+    // KIDSOTT_REELS_ADMIN_PREVIEW_REFERENCE_V1
+    // Only newly uploaded MP4 reels use this additional lookup.
+    // Existing video references remain unchanged.
+    // This is for authenticated Admin preview only.
+    // It does not alter public media eligibility.
+
+    if (!filename.toLowerCase().endsWith(".mp4")) {
+      return false;
+    }
+
+    const [reelRows] = await db.query(
+      `SELECT id
+       FROM reels
+       WHERE source_type = 'upload'
+         AND video_url LIKE ?
+       LIMIT 1`,
+      [suffix]
+    );
+
+    return reelRows.length > 0;
   }
   // Category artwork is available to authenticated Admin previews,
   // including when the category is inactive.
