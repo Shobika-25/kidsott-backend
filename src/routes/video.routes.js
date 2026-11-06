@@ -1,4 +1,4 @@
-﻿const express =
+const express =
   require("express");
 
 const authenticate =
@@ -22,6 +22,11 @@ const {
   "../controllers/video.controller"
 );
 
+const {
+  getVideoRatingSummary,
+  getMyVideoRating,
+  upsertMyVideoRating,
+} = require('../controllers/video-rating.controller');
 const router =
   express.Router();
 
@@ -37,6 +42,10 @@ router.get(
   getAdminVideos
 );
 
+// KIDSOTT_DB_RATINGS_V1: local-only API routes. No hosted migration/deploy here.
+router.get('/:id/ratings', getVideoRatingSummary);
+router.get('/:id/my-rating', authenticate, getMyVideoRating);
+router.put('/:id/rating', authenticate, upsertMyVideoRating);
 router.get(
   "/:id",
   getVideoById
