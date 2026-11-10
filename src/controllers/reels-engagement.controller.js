@@ -70,7 +70,7 @@ function checkId(req, res) {
 async function publishedReel(id) {
   const [rows] = await db.query(
     `SELECT r.id,
-            COALESCE(s.likes_enabled, 1) AS likesEnabled
+            COALESCE(s.likes_enabled, 0) AS likesEnabled
        FROM reels r
        LEFT JOIN reel_interaction_settings s
          ON s.reel_id = r.id
