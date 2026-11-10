@@ -434,6 +434,22 @@ async function submitComment(req, res) {
     return res.status(503).json({success: false, message: "Comment submissions are disabled."});
   }
   if (!hostedOnly()) return noHostedDb(res);
+  // KIDSOTT_REELS_COMMENTS_APPROVED_ACCOUNTS_GUARD_V1
+  // Until server-verified guardian/adult eligibility exists, only explicitly
+  // approved account IDs can submit free-text comments. Missing list = DENY.
+  const allowedCommentUserIds = new Set(
+    String(process.env.KIDSOTT_REELS_COMMENT_ALLOWED_USER_IDS || "")
+      .split(",")
+      .map(value => value.trim())
+      .filter(value => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)))
+  );
+  if (!allowedCommentUserIds.has(String(userId))) {
+    return res.status(403).json({
+      success: false,
+      message: "Comment submission is restricted to approved accounts."
+    });
+  }
+
   const content = req.body && typeof req.body.text === "string" ? req.body.text.trim() : "";
   const chars = Array.from(content);
   if (chars.length < 2 || chars.length > 200 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(content) ||
