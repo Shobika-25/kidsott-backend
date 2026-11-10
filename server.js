@@ -197,6 +197,9 @@ if (process.env.KIDSOTT_RAZORPAY_TEST_ENABLED === "true") {
   app.use("/subscriptions", require("./src/routes/razorpay-test.routes"));
 }
 app.use("/subscriptions", subscriptionRoutes);
+// KIDSOTT_REELS_READ_API_V1
+const reelsRoutes = require("./src/routes/reels.routes");
+app.use("/api/reels", reelsRoutes);
 app.use((req, res) => {
   res.status(404).json({
     success: false,

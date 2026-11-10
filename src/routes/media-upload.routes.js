@@ -6,6 +6,8 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const cloudImageStorage = require("../services/supabase-storage.service");
+const reelUploadReceipt = require("../services/reels-upload-receipt.service");
+const reelsDb = require("../config/db");
 
 const authenticate = require("../middleware/auth.middleware");
 
@@ -259,6 +261,47 @@ function uploadHandler(kind) {
       }
 
       try {
+        // KIDSOTT_REELS_RECEIPT_UPLOAD_ROUTE_V1
+        // Dedicated Reel uploads must be MP4 and at most 50 MB.
+        // The existing standard video upload is unaffected.
+        if (req.kidsottReelUpload) {
+          const extension = path.extname(
+            req.file.filename || ""
+          ).toLowerCase();
+
+          if (
+            extension !== ".mp4" ||
+            req.file.mimetype !== "video/mp4"
+          ) {
+            await removeRejectedFile(req.file);
+
+            return res.status(415).json({
+              success: false,
+              message: "Reels require an MP4 file."
+            });
+          }
+
+          if (
+            !Number.isSafeInteger(req.file.size) ||
+            req.file.size < 12 ||
+            req.file.size > 50 * 1024 * 1024
+          ) {
+            await removeRejectedFile(req.file);
+
+            return res.status(413).json({
+              success: false,
+              message: "Reel MP4 must be 50 MB or smaller."
+            });
+          }
+
+          // Prepare the receipt before cloud upload.
+          // Only return it after the upload succeeds.
+          req.kidsottReelReceipt =
+            reelUploadReceipt.issueReceipt(
+              req.user.id,
+              req.file.filename
+            );
+        }
         // KIDSOTT_SUPABASE_MEMORY_IMAGE_FILENAME_V1
         // Multer memoryStorage supplies `buffer`, not `filename`.
         // Generate the same UUID.extension contract as the old disk route.
@@ -348,6 +391,10 @@ function uploadHandler(kind) {
           mimeType: req.file.mimetype,
           sizeBytes: req.file.size,
           relativeUrl,
+          ...(req.kidsottReelUpload ? {
+            uploadReceipt: req.kidsottReelReceipt.receipt,
+            receiptExpiresAt: req.kidsottReelReceipt.expiresAt
+          } : {}),
         });
       } catch (validationError) {
         if (kind === "video" && validationError &&
@@ -408,6 +455,53 @@ router.use(authenticate, requireAdmin);
 // multipart/form-data, field name: file
 router.post(
   "/video",
+  uploadHandler("video")
+);
+// Dedicated Reels upload route.
+// Existing /video route is not modified.
+router.post(
+  "/reel-video",
+  (req, res, next) => {
+    const config = (
+      reelsDb.pool || reelsDb
+    )?.config?.connectionConfig;
+
+    const approved =
+      config &&
+      config.host ===
+        "kidsott-mysql-shobi5002-05dc.i.aivencloud.com" &&
+      Number(config.port) === 10111 &&
+      config.database === "kidsott_db_v2" &&
+      Boolean(config.ssl) &&
+      config.ssl.rejectUnauthorized !== false;
+
+    if (!approved) {
+      return res.status(503).json({
+        success: false,
+        message: "Approved hosted Aiven configuration required."
+      });
+    }
+
+    if (
+      process.env.KIDSOTT_REELS_UPLOAD_DRAFT_ENABLED !== "true" ||
+      !reelUploadReceipt.receiptsEnabled()
+    ) {
+      return res.status(404).json({
+        success: false,
+        message: "Reels upload is not enabled."
+      });
+    }
+
+    if (!reelUploadReceipt.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: "Reels receipt signing is not configured."
+      });
+    }
+
+    req.kidsottReelUpload = true;
+    next();
+  },
   uploadHandler("video")
 );
 
