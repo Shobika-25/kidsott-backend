@@ -128,6 +128,12 @@ router.get(
   "/:id/comments",
   reelComments.getPublicComments
 );
+// KIDSOTT_REELS_MODERATED_SUBMISSION_FINAL_V1
+router.post(
+  "/:id/comments",
+  authenticate,
+  reelComments.submitComment
+);
 
 // KIDSOTT_REELS_COMMENTS_MODERATION_B2B
 router.patch(
