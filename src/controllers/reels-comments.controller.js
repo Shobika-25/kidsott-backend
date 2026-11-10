@@ -1,0 +1,417 @@
+"use strict";
+
+// KIDSOTT_REELS_COMMENTS_READONLY_B2A
+// Public display disabled by default.
+// Admin queue is read-only. No comment writes.
+
+const db = require("../config/db");
+const MAX_ID = 18446744073709551615n;
+
+function hostedOnly() {
+  const host = String(process.env.DB_HOST || "").trim().toLowerCase();
+
+  return host.endsWith(".aivencloud.com") &&
+    String(process.env.DB_NAME || "").trim() === "kidsott_db_v2";
+}
+
+function parseId(value) {
+  if (typeof value !== "string" ||
+      !/^[1-9][0-9]{0,19}$/.test(value)) {
+    return null;
+  }
+
+  try {
+    return BigInt(value) <= MAX_ID ? value : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function dbFailure(res, error) {
+  console.error(
+    "[REELS_COMMENTS_READONLY_B2A]",
+    String(error?.code || "DATABASE_ERROR")
+  );
+
+  return res.status(503).json({
+    success: false,
+    message: "Comments service unavailable."
+  });
+}
+
+function noHostedDb(res) {
+  return res.status(503).json({
+    success: false,
+    message: "Hosted comments database unavailable."
+  });
+}
+
+async function getPublicComments(req, res) {
+  const id = parseId(req.params.id);
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid Reel ID."
+    });
+  }
+
+  if (!hostedOnly()) return noHostedDb(res);
+
+  try {
+    const [reels] = await db.query(
+      `SELECT r.id,
+              COALESCE(s.comments_enabled, 0) AS commentsEnabled
+         FROM reels r
+         LEFT JOIN reel_interaction_settings s
+           ON s.reel_id = r.id
+        WHERE r.id = ?
+          AND r.status = 'published'
+          AND r.is_active = 1
+        LIMIT 1`,
+      [id]
+    );
+
+    if (!reels.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Reel not found."
+      });
+    }
+
+    const enabled =
+      process.env.KIDSOTT_REELS_PUBLIC_COMMENTS_ENABLED === "true" &&
+      Number(reels[0].commentsEnabled) === 1;
+
+    if (!enabled) {
+      return res.json({
+        success: true,
+        reelId: id,
+        commentsEnabled: false,
+        data: []
+      });
+    }
+
+    const [rows] = await db.query(
+      `SELECT id, comment_text, created_at
+         FROM reel_comments
+        WHERE reel_id = ?
+          AND status = 'approved'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 30`,
+      [id]
+    );
+
+    return res.json({
+      success: true,
+      reelId: id,
+      commentsEnabled: true,
+      data: rows.map(row => ({
+        id: String(row.id),
+        text: row.comment_text,
+        createdAt: row.created_at
+      }))
+    });
+  } catch (error) {
+    return dbFailure(res, error);
+  }
+}
+
+async function getAdminComments(req, res) {
+  if (!hostedOnly()) return noHostedDb(res);
+
+  const statuses = new Set([
+    "pending", "approved", "rejected", "hidden"
+  ]);
+
+  const status =
+    req.query.status === undefined
+      ? "pending"
+      : req.query.status;
+
+  const rawPage =
+    req.query.page === undefined
+      ? "1"
+      : String(req.query.page);
+
+  if (
+    typeof status !== "string" ||
+    !statuses.has(status) ||
+    !/^[1-9][0-9]{0,3}$/.test(rawPage)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid moderation filter."
+    });
+  }
+
+  const page = Number(rawPage);
+  const limit = 25;
+
+  try {
+    const [rows] = await db.query(
+      `SELECT
+          c.id,
+          c.reel_id,
+          c.user_id,
+          c.comment_text,
+          c.status,
+          c.created_at,
+          c.updated_at,
+          r.title AS reel_title
+       FROM reel_comments c
+       JOIN reels r ON r.id = c.reel_id
+       WHERE c.status = ?
+       ORDER BY c.created_at DESC, c.id DESC
+       LIMIT ? OFFSET ?`,
+      [status, limit, (page - 1) * limit]
+    );
+
+    const [[totalRow]] = await db.query(
+      `SELECT COUNT(*) AS total
+         FROM reel_comments
+        WHERE status = ?`,
+      [status]
+    );
+
+    return res.json({
+      success: true,
+      data: rows.map(row => ({
+        id: String(row.id),
+        reelId: String(row.reel_id),
+        authorUserId: String(row.user_id),
+        reelTitle: row.reel_title,
+        text: row.comment_text,
+        status: row.status,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      })),
+      pagination: {
+        page,
+        limit,
+        total: Number(totalRow.total)
+      }
+    });
+  } catch (error) {
+    return dbFailure(res, error);
+  }
+}
+
+module.exports = {
+  getPublicComments,
+  getAdminComments
+};
+
+
+// KIDSOTT_REELS_COMMENTS_MODERATION_B2B
+// Admin-only; writes disabled unless explicitly enabled.
+// Uses the hosted database pool and an atomic audit transaction.
+
+const UINT64_MAX_B2B = 18446744073709551615n;
+
+function parseCommentIdB2B(value) {
+  if (
+    typeof value !== "string" ||
+    !/^[1-9][0-9]{0,19}$/.test(value)
+  ) {
+    return null;
+  }
+
+  try {
+    return BigInt(value) <= UINT64_MAX_B2B ? value : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function moderateComment(req, res) {
+  if (
+    !req.user ||
+    req.user.role !== "admin" ||
+    !Number.isSafeInteger(req.user.id) ||
+    req.user.id <= 0
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: "Admin access required."
+    });
+  }
+
+  if (
+    process.env.KIDSOTT_REELS_COMMENT_MODERATION_WRITES_ENABLED !== "true"
+  ) {
+    return res.status(503).json({
+      success: false,
+      message: "Comment moderation writes are disabled."
+    });
+  }
+
+  if (!hostedOnly()) return noHostedDb(res);
+
+  const id = parseCommentIdB2B(req.params.id);
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid comment ID."
+    });
+  }
+
+  const body = req.body;
+
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    !["approve", "reject", "hide", "reopen"].includes(body.action) ||
+    (body.reason != null && typeof body.reason !== "string")
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid moderation request."
+    });
+  }
+
+  const reason =
+    typeof body.reason === "string"
+      ? body.reason.trim()
+      : "";
+
+  if (
+    reason.length > 255 ||
+    (
+      (body.action === "reject" || body.action === "hide") &&
+      reason.length < 3
+    )
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Reject and Hide require a reason of 3 to 255 characters."
+    });
+  }
+
+  const transitions = {
+    pending: {
+      approve: "approved",
+      reject: "rejected"
+    },
+    approved: {
+      hide: "hidden"
+    },
+    rejected: {
+      reopen: "pending"
+    },
+    hidden: {
+      reopen: "pending"
+    }
+  };
+
+  let conn;
+
+  try {
+    conn = await db.getConnection();
+
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query(
+      `SELECT id, status
+         FROM reel_comments
+        WHERE id = ?
+        FOR UPDATE`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      await conn.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Comment not found."
+      });
+    }
+
+    const previousStatus = String(rows[0].status);
+    const nextStatus = transitions[previousStatus]?.[body.action];
+
+    if (!nextStatus) {
+      await conn.rollback();
+
+      return res.status(409).json({
+        success: false,
+        message: "Invalid comment status transition."
+      });
+    }
+
+    if (body.action === "reopen") {
+      await conn.query(
+        `UPDATE reel_comments
+            SET status = 'pending',
+                reviewed_by_user_id = NULL,
+                reviewed_at = NULL,
+                moderation_reason = NULL
+          WHERE id = ?`,
+        [id]
+      );
+    } else {
+      await conn.query(
+        `UPDATE reel_comments
+            SET status = ?,
+                reviewed_by_user_id = ?,
+                reviewed_at = CURRENT_TIMESTAMP(3),
+                moderation_reason = ?
+          WHERE id = ?`,
+        [
+          nextStatus,
+          String(req.user.id),
+          reason || null,
+          id
+        ]
+      );
+    }
+
+    await conn.query(
+      `INSERT INTO reel_moderation_logs
+        (
+          comment_id,
+          admin_user_id,
+          action,
+          previous_status,
+          new_status,
+          reason
+        )
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        String(req.user.id),
+        body.action,
+        previousStatus,
+        nextStatus,
+        reason || null
+      ]
+    );
+
+    await conn.commit();
+
+    return res.json({
+      success: true,
+      data: {
+        commentId: id,
+        action: body.action,
+        previousStatus,
+        status: nextStatus
+      }
+    });
+  } catch (error) {
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch (_) {}
+    }
+
+    return dbFailure(res, error);
+  } finally {
+    if (conn) conn.release();
+  }
+}
+
+module.exports.moderateComment = moderateComment;

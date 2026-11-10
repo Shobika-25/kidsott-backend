@@ -80,4 +80,60 @@ router.patch("/admin/:id", authenticate, requireAdmin,
   require("../controllers/reels.controller").updateAdminReel);
 router.post("/admin/:id/visibility", authenticate, requireAdmin,
   require("../controllers/reels.controller").changeReelVisibility);
+
+// KIDSOTT_REELS_ENGAGEMENT_B1
+const reelsEngagement = require("../controllers/reels-engagement.controller");
+
+router.get(
+  "/admin/engagement",
+  authenticate,
+  requireAdmin,
+  reelsEngagement.getAdminEngagement
+);
+
+router.get(
+  "/:id/engagement",
+  reelsEngagement.getEngagement
+);
+
+router.get(
+  "/:id/my-like",
+  authenticate,
+  reelsEngagement.getMyLike
+);
+
+router.put(
+  "/:id/like",
+  authenticate,
+  reelsEngagement.putLike
+);
+
+router.delete(
+  "/:id/like",
+  authenticate,
+  reelsEngagement.deleteLike
+);
+
+// KIDSOTT_REELS_COMMENTS_READONLY_B2A
+const reelComments = require("../controllers/reels-comments.controller");
+
+router.get(
+  "/admin/comments",
+  authenticate,
+  requireAdmin,
+  reelComments.getAdminComments
+);
+
+router.get(
+  "/:id/comments",
+  reelComments.getPublicComments
+);
+
+// KIDSOTT_REELS_COMMENTS_MODERATION_B2B
+router.patch(
+  "/admin/comments/:id/moderate",
+  authenticate,
+  requireAdmin,
+  reelComments.moderateComment
+);
 module.exports = router;
