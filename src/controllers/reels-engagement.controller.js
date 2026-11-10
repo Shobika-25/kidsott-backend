@@ -116,6 +116,8 @@ async function getEngagement(req, res) {
       reelId: id,
       likeCount,
       likesEnabled: Number(reel.likesEnabled) === 1,
+      likeWritesEnabled: process.env.KIDSOTT_REELS_LIKE_WRITES_ENABLED === "true" &&
+        Number(reel.likesEnabled) === 1,
       commentsEnabled: false
     });
   } catch (error) {

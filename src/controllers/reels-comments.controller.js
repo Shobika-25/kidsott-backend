@@ -88,6 +88,7 @@ async function getPublicComments(req, res) {
         success: true,
         reelId: id,
         commentsEnabled: false,
+        commentSubmissionEnabled: false,
         data: []
       });
     }
@@ -106,6 +107,7 @@ async function getPublicComments(req, res) {
       success: true,
       reelId: id,
       commentsEnabled: true,
+      commentSubmissionEnabled: process.env.KIDSOTT_REELS_COMMENT_SUBMISSION_ENABLED === "true",
       data: rows.map(row => ({
         id: String(row.id),
         text: row.comment_text,
@@ -415,3 +417,64 @@ async function moderateComment(req, res) {
 }
 
 module.exports.moderateComment = moderateComment;
+
+// KIDSOTT_REELS_MODERATED_SUBMISSION_FINAL_V1
+// Existing user authentication, existing reel_comments table, pending-only writes.
+// Intentionally OFF until the owner approves child-account comment eligibility.
+async function submitComment(req, res) {
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(400).json({success: false, message: "Invalid Reel ID."});
+  }
+  const userId = req.user && req.user.id;
+  if (!Number.isSafeInteger(userId) || userId <= 0) {
+    return res.status(401).json({success: false, message: "Sign in required."});
+  }
+  if (process.env.KIDSOTT_REELS_COMMENT_SUBMISSION_ENABLED !== "true") {
+    return res.status(503).json({success: false, message: "Comment submissions are disabled."});
+  }
+  if (!hostedOnly()) return noHostedDb(res);
+  const content = req.body && typeof req.body.text === "string" ? req.body.text.trim() : "";
+  const chars = Array.from(content);
+  if (chars.length < 2 || chars.length > 200 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(content) ||
+      /(?:https?:\/\/|www\.|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/i.test(content) ||
+      /(?:\+?\d[\d\s().-]{8,}\d)/.test(content)) {
+    return res.status(400).json({success: false, message: "Enter 2-200 characters without links or personal contact details."});
+  }
+  try {
+    const [reels] = await db.query(
+      `SELECT r.id, COALESCE(s.comments_enabled, 0) AS commentsEnabled
+         FROM reels r
+         LEFT JOIN reel_interaction_settings s ON s.reel_id = r.id
+        WHERE r.id = ? AND r.status = 'published' AND r.is_active = 1
+        LIMIT 1`,
+      [id]
+    );
+    if (!reels.length) return res.status(404).json({success: false, message: "Reel not found."});
+    if (Number(reels[0].commentsEnabled) !== 1) {
+      return res.status(403).json({success: false, message: "Comments are disabled for this Reel."});
+    }
+    const [[rate]] = await db.query(
+      `SELECT COUNT(*) AS recent FROM reel_comments
+         WHERE user_id = ? AND created_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 1 MINUTE)`,
+      [String(userId)]
+    );
+    if (Number(rate.recent) >= 2) {
+      return res.status(429).json({success: false, message: "Please wait before commenting again."});
+    }
+    const [saved] = await db.query(
+      "INSERT INTO reel_comments (reel_id, user_id, comment_text, status) VALUES (?, ?, ?, 'pending')",
+      [id, String(userId), content]
+    );
+    return res.status(201).json({
+      success: true,
+      reelId: id,
+      commentId: String(saved.insertId),
+      status: "pending",
+      message: "Submitted for moderation."
+    });
+  } catch (error) {
+    return dbFailure(res, error);
+  }
+}
+module.exports.submitComment = submitComment;
