@@ -383,9 +383,7 @@ async function createCatalogDraftReel(req, res) {
 function reelsManagementEnabled() {
   const approvedHost = "kidsott-mysql-shobi5002-05dc.i.aivencloud.com";
   const actual = (db.pool || db)?.config?.connectionConfig;
-  return process.env.NODE_ENV !== "production" &&
-    process.env.KIDSOTT_REELS_ADMIN_ACTIONS_ENABLED === "true" &&
-    String(process.env.DB_HOST || "").trim().toLowerCase() === approvedHost &&
+  return String(process.env.DB_HOST || "").trim().toLowerCase() === approvedHost &&
     actual && actual.host === approvedHost &&
     Number(actual.port) === 10111 &&
     actual.database === "kidsott_db_v2" &&
