@@ -94,15 +94,22 @@ async function getPublicComments(req, res) {
     }
 
     const [rows] = await db.query(
-      `SELECT id, comment_text, created_at
-         FROM reel_comments
-        WHERE reel_id = ?
-          AND status = 'approved'
-        ORDER BY created_at DESC, id DESC
+      `SELECT c.id, c.user_id, c.comment_text, c.created_at,
+              u.name AS author_name
+         FROM reel_comments c
+         LEFT JOIN users u ON u.id = c.user_id
+        WHERE c.reel_id = ?
+          AND c.status = 'approved'
+        ORDER BY c.created_at DESC, c.id DESC
         LIMIT 30`,
       [id]
     );
 
+    // KIDSOTT_REELS_COMMENT_AUTHOR_NAME_V2: adult test allowlist, no private IDs in response.
+    const approvedAuthorIds = new Set(
+      String(process.env.KIDSOTT_REELS_COMMENT_ALLOWED_USER_IDS || "")
+        .split(",").map(value => value.trim()).filter(Boolean)
+    );
     return res.json({
       success: true,
       reelId: id,
@@ -111,7 +118,11 @@ async function getPublicComments(req, res) {
       data: rows.map(row => ({
         id: String(row.id),
         text: row.comment_text,
-        createdAt: row.created_at
+        createdAt: row.created_at,
+        authorName: approvedAuthorIds.has(String(row.user_id)) &&
+          typeof row.author_name === "string" && row.author_name.trim()
+            ? row.author_name.trim().slice(0, 50)
+            : "Community member"
       }))
     });
   } catch (error) {
