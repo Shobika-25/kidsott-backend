@@ -451,8 +451,13 @@ async function updateAdminReel(req, res) {
     const reel = await reelRowForUpdate(conn, id);
     if (!reel) return res.status(404).json({ success: false, message: "Reel not found." });
     const catalog = reel.sourceType === "catalog";
+    // Optional cover is editable only for uploaded Reels. Keep the existing
+    // strict five-field metadata contract when no cover is supplied.
+    const hasCoverUpdate = !catalog &&
+      Object.prototype.hasOwnProperty.call(input, "thumbnailUrl");
     const allowed = catalog ? ["sortOrder"] :
-      ["title", "description", "categoryId", "ageRating", "sortOrder"];
+      ["title", "description", "categoryId", "ageRating", "sortOrder",
+        ...(hasCoverUpdate ? ["thumbnailUrl"] : [])];
     if (Object.keys(input).length !== allowed.length ||
         Object.keys(input).some(key => !allowed.includes(key))) {
       return res.status(400).json({ success: false, message: "Unexpected or missing editable fields." });
@@ -486,11 +491,31 @@ async function updateAdminReel(req, res) {
           !await eligibleForPublication(conn, reel, categoryId)) {
         return res.status(422).json({ success: false, message: "Published Reel is no longer eligible." });
       }
+      // Do not accept arbitrary remote URLs, Supabase signed links, or
+      // unpublished file paths as Reel covers. Use the existing backend route.
+      let normalizedCoverUrl = null;
+      if (hasCoverUpdate) {
+        const value = input.thumbnailUrl;
+        const origin = "https://kidsott-backend.onrender.com";
+        const relative = typeof value === "string" && value.startsWith(origin + "/")
+          ? value.slice(origin.length) : value;
+        if (typeof relative !== "string" ||
+            !/^\/api\/media\/files\/images\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.(?:jpg|jpeg|png|webp)$/i.test(relative)) {
+          return res.status(400).json({ success: false, message: "Invalid Reel cover image URL." });
+        }
+        normalizedCoverUrl = origin + relative;
+      }
       await conn.query(
         `UPDATE reels SET title = ?, description = ?, category_id = ?,
          age_rating = ?, sort_order = ? WHERE id = ? AND source_type = 'upload'`,
         [title.trim(), description.trim(), categoryId, rating, sortOrder, id]
       );
+      if (hasCoverUpdate) {
+        await conn.query(
+          "UPDATE reels SET thumbnail_url = ? WHERE id = ? AND source_type = 'upload'",
+          [normalizedCoverUrl, id]
+        );
+      }
     }
     await conn.commit(); transaction = false;
     res.set("Cache-Control", "no-store");

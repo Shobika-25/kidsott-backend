@@ -18,8 +18,9 @@ const MAX_ID = 18446744073709551615n;
 const FILE_PATTERN =
   /^\/api\/media\/files\/videos\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.mp4)$/i;
 
+// KIDSOTT_REELS_UPLOAD_COVER_ABSOLUTE_40C2
 const IMAGE_PATTERN =
-  /^\/api\/media\/files\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp)$/i;
+  /^(?:https:\/\/kidsott-backend\.onrender\.com)?\/api\/media\/files\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp)$/i;
 
 function requireHostedAiven(req, res, next) {
   const config = (
