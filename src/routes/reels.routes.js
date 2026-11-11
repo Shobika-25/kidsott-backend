@@ -114,6 +114,13 @@ router.delete(
   reelsEngagement.deleteLike
 );
 
+// KIDSOTT_REELS_SAVES_39D
+// Opt-in: protected per-user saves; DB schema must be manually approved first.
+const reelSaves = require("../controllers/reels-saves.controller");
+router.get("/me/saved", authenticate, reelSaves.getSavedReels);
+router.get("/:id/my-save", authenticate, reelSaves.getMySave);
+router.put("/:id/save", authenticate, reelSaves.putSave);
+router.delete("/:id/save", authenticate, reelSaves.deleteSave);
 // KIDSOTT_REELS_COMMENTS_READONLY_B2A
 const reelComments = require("../controllers/reels-comments.controller");
 
