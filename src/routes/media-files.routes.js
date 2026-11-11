@@ -115,6 +115,22 @@ async function isPubliclyEligible(kind, filename) {
     if (categoryRows.length > 0) return true;
   }
 
+  // KIDSOTT_REELS_COVER_PUBLIC_40B2
+  // Same publication gate as public uploaded MP4; do not expose draft covers.
+  if (kind === "images") {
+    const [coverRows] = await db.query(`
+      SELECT r.id FROM reels r
+      INNER JOIN categories c ON c.id = r.category_id
+      WHERE r.source_type = 'upload'
+        AND r.status = 'published'
+        AND r.is_active = 1
+        AND c.is_active = 1
+        AND r.thumbnail_url LIKE ?
+      LIMIT 1
+    `, [suffix]);
+    if (coverRows.length > 0) return true;
+  }
+
   const [rows] = await db.query(`
     SELECT v.id
     FROM videos v
@@ -293,6 +309,15 @@ async function referencedByVideo(kind, filename) {
       [suffix]
     );
     if (categoryRows.length > 0) return true;
+  }
+
+  // KIDSOTT_REELS_COVER_ADMIN_PREVIEW_40B2
+  if (kind === "images") {
+    const [coverRows] = await db.query(
+      "SELECT id FROM reels WHERE source_type = 'upload' AND thumbnail_url LIKE ? LIMIT 1",
+      [suffix]
+    );
+    if (coverRows.length > 0) return true;
   }
 
   const [rows] = await db.query(
