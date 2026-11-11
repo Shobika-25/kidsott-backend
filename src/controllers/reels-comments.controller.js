@@ -130,6 +130,7 @@ async function getPublicComments(req, res) {
   }
 }
 
+// KIDSOTT_REELS_ADMIN_AUTHOR_NAME_32A: Admin-only author names from users.name.
 async function getAdminComments(req, res) {
   if (!hostedOnly()) return noHostedDb(res);
 
@@ -171,9 +172,11 @@ async function getAdminComments(req, res) {
           c.status,
           c.created_at,
           c.updated_at,
-          r.title AS reel_title
+          r.title AS reel_title,
+           u.name AS author_name
        FROM reel_comments c
        JOIN reels r ON r.id = c.reel_id
+        LEFT JOIN users u ON u.id = c.user_id
        WHERE c.status = ?
        ORDER BY c.created_at DESC, c.id DESC
        LIMIT ? OFFSET ?`,
@@ -193,6 +196,8 @@ async function getAdminComments(req, res) {
         id: String(row.id),
         reelId: String(row.reel_id),
         authorUserId: String(row.user_id),
+         authorName: typeof row.author_name === "string"
+           ? row.author_name.trim().slice(0, 100) : "",
         reelTitle: row.reel_title,
         text: row.comment_text,
         status: row.status,
